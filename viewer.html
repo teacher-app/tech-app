@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>المشاهد</title>
+    <style>
+        body { padding: 20px; font-family: Arial; }
+        video { width: 100%; max-width: 600px; background: black; }
+        input, button { padding: 10px; margin: 5px; font-size: 16px; }
+        #status { padding: 10px; margin: 10px 0; }
+    </style>
+</head>
+<body>
+    <h1>👁️ المشاهد</h1>
+    
+    <div>
+        <input type="text" id="roomId" value="live1" placeholder="Room ID">
+        <button onclick="joinRoom()">🚀 انضم للبث</button>
+    </div>
+    
+    <div id="status">أدخل معرف الغرفة</div>
+    
+    <video id="remoteVideo" autoplay playsinline controls></video>
+    
+    <script>
+        const SERVER = 'wss://cripanyt.onrender.com';
+        let socket;
+        let peerConnection;
+        let roomId;
+        
+        function joinRoom() {
+            roomId = document.getElementById('roomId').value.trim();
+            if (!roomId) return alert('أدخل معرف الغرفة');
+            
+            document.getElementById('status').textContent = 'جاري الاتصال...';
+            document.querySelector('button').disabled = true;
+            
+            socket = new WebSocket(SERVER);
+            
+            socket.onopen = () => {
+                socket.send(JSON.stringify({
+                    type: 'join-room',
+                    roomId: roomId
+                }));
+            };
+            
+            socket.onmessage = async (event) => {
+                const data = JSON.parse(event.data);
+                
+                if (data.type === 'room-joined') {
+                    document.getElementById('status').textContent = 'بانتظار البث...';
+                }
+                else if (data.type === 'offer') {
+                    await handleOffer(data.sdp);
+                }
+                else if (data.type === 'ice-candidate') {
+                    if (peerConnection) {
+                        await peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate));
+                    }
+                }
+                else if (data.type === 'broadcaster-left') {
+                    document.getElementById('status').textContent = 'انتهى البث';
+                    if (peerConnection) peerConnection.close();
+                    document.querySelector('button').disabled = false;
+                }
+                else if (data.type === 'error') {
+                    alert(data.message);
+                    document.querySelector('button').disabled = false;
+                }
+            };
+            
+            socket.onclose = () => {
+                document.getElementById('status').textContent = 'انقطع الاتصال';
+                document.querySelector('button').disabled = false;
+            };
+        }
+        
+        async function handleOffer(sdp) {
+            if (peerConnection) peerConnection.close();
+            
+            peerConnection = new RTCPeerConnection({
+                iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+            });
+            
+            peerConnection.ontrack = (event) => {
+                const video = document.getElementById('remoteVideo');
+                if (video.srcObject !== event.streams[0]) {
+                    video.srcObject = event.streams[0];
+                    document.getElementById('status').textContent = 'يشاهد البث الآن';
+                }
+            };
+            
+            peerConnection.onicecandidate = (event) => {
+                if (event.candidate && socket.readyState === 1) {
+                    socket.send(JSON.stringify({
+                        type: 'ice-candidate',
+                        candidate: event.candidate,
+                        roomId: roomId
+                    }));
+                }
+            };
+            
+            await peerConnection.setRemoteDescription(new RTCSessionDescription(sdp));
+            
+            const answer = await peerConnection.createAnswer();
+            await peerConnection.setLocalDescription(answer);
+            
+            socket.send(JSON.stringify({
+                type: 'answer',
+                sdp: answer,
+                roomId: roomId
+            }));
+        }
+    </script>
+</body>
+</html>

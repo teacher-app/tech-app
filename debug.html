@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>تشخيص المشكلة</title>
+</head>
+<body>
+    <h2>🔍 تشخيص مشكلة WebRTC</h2>
+    
+    <button onclick="testWebSocket()">1. اختبار اتصال WebSocket</button>
+    <div id="wsResult"></div>
+    
+    <button onclick="testWebRTC()">2. اختبار WebRTC</button>
+    <div id="webrtcResult"></div>
+    
+    <button onclick="testCamera()">3. اختبار الكاميرا</button>
+    <div id="cameraResult"></div>
+    
+    <button onclick="checkServer()">4. التحقق من السيرفر</button>
+    <div id="serverResult"></div>
+    
+    <h3>نتائج الفحص:</h3>
+    <pre id="results"></pre>
+
+    <script>
+        const results = document.getElementById('results');
+        
+        async function testWebSocket() {
+            const wsResult = document.getElementById('wsResult');
+            wsResult.innerHTML = '⏳ جاري الاختبار...';
+            
+            try {
+                // جرب عدة خوادم
+                const servers = [
+                    'wss://cripanyt.onrender.com',
+                    'ws://cripanyt.onrender.com:10000',
+                    'wss://cripanyt.onrender.com:10000'
+                ];
+                
+                let connected = false;
+                let errorMsg = '';
+                
+                for (let server of servers) {
+                    try {
+                        const ws = new WebSocket(server);
+                        
+                        await new Promise((resolve, reject) => {
+                            ws.onopen = () => {
+                                connected = true;
+                                ws.close();
+                                resolve();
+                            };
+                            ws.onerror = () => {
+                                reject(new Error(`فشل الاتصال بـ ${server}`));
+                            };
+                            setTimeout(() => reject(new Error('انتهى وقت الانتظار')), 5000);
+                        });
+                        
+                        if (connected) {
+                            wsResult.innerHTML = `✅ متصل بـ ${server}`;
+                            logResult(`✅ WebSocket: متصل بـ ${server}`);
+                            return;
+                        }
+                    } catch (e) {
+                        errorMsg = e.message;
+                    }
+                }
+                
+                if (!connected) {
+                    wsResult.innerHTML = `❌ فشل الاتصال: ${errorMsg}`;
+                    logResult(`❌ WebSocket: فشل الاتصال`);
+                }
+                
+            } catch (error) {
+                wsResult.innerHTML = `❌ خطأ: ${error.message}`;
+                logResult(`❌ WebSocket: ${error.message}`);
+            }
+        }
+        
+        async function testWebRTC() {
+            const webrtcResult = document.getElementById('webrtcResult');
+            webrtcResult.innerHTML = '⏳ جاري اختبار WebRTC...';
+            
+            try {
+                // تحقق من دعم WebRTC
+                if (!window.RTCPeerConnection) {
+                    throw new Error('المتصفح لا يدعم WebRTC');
+                }
+                
+                // إنشاء اتصال اختبار
+                const pc = new RTCPeerConnection({
+                    iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+                });
+                
+                // اختبار ICE
+                pc.onicecandidate = (event) => {
+                    if (event.candidate) {
+                        logResult(`✅ WebRTC ICE: يعمل`);
+                    }
+                };
+                
+                // إنشاء عرض اختبار
+                const offer = await pc.createOffer();
+                await pc.setLocalDescription(offer);
+                
+                webrtcResult.innerHTML = '✅ WebRTC يعمل بشكل صحيح';
+                logResult('✅ WebRTC: يعمل');
+                
+                pc.close();
+                
+            } catch (error) {
+                webrtcResult.innerHTML = `❌ خطأ في WebRTC: ${error.message}`;
+                logResult(`❌ WebRTC: ${error.message}`);
+            }
+        }
+        
+        async function testCamera() {
+            const cameraResult = document.getElementById('cameraResult');
+            cameraResult.innerHTML = '⏳ طلب إذن الكاميرا...';
+            
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ 
+                    video: true, 
+                    audio: true 
+                });
+                
+                cameraResult.innerHTML = `✅ الكاميرا تعمل (${stream.getTracks().length} تراك)`;
+                logResult('✅ الكاميرا: تعمل');
+                
+                stream.getTracks().forEach(track => track.stop());
+                
+            } catch (error) {
+                cameraResult.innerHTML = `❌ خطأ في الكاميرا: ${error.message}`;
+                logResult(`❌ الكاميرا: ${error.message}`);
+            }
+        }
+        
+        async function checkServer() {
+            const serverResult = document.getElementById('serverResult');
+            serverResult.innerHTML = '⏳ جاري التحقق من السيرفر...';
+            
+            try {
+                const response = await fetch('https://cripanyt.onrender.com', {
+                    method: 'GET',
+                    mode: 'no-cors'
+                });
+                
+                serverResult.innerHTML = '✅ السيرفر يستجيب';
+                logResult('✅ السيرفر: يعمل');
+                
+            } catch (error) {
+                serverResult.innerHTML = `❌ خطأ في السيرفر: ${error.message}`;
+                logResult(`❌ السيرفر: ${error.message}`);
+            }
+        }
+        
+        function logResult(message) {
+            results.innerHTML += new Date().toLocaleTimeString() + ' - ' + message + '\n';
+        }
+        
+        // تشغيل جميع الاختبارات تلقائياً
+        window.onload = () => {
+            setTimeout(testWebSocket, 1000);
+            setTimeout(testWebRTC, 2000);
+            setTimeout(testCamera, 3000);
+            setTimeout(checkServer, 4000);
+        };
+    </script>
+</body>
+</html>

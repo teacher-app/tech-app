@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <title>المديع - بث مباشر</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 20px; background: #1a1a2e; color: white; }
+        .container { max-width: 800px; margin: auto; }
+        input, button { width: 100%; padding: 12px; margin: 8px 0; font-size: 16px; border-radius: 5px; border: none; box-sizing: border-box; }
+        input { background: #16213e; color: white; border: 1px solid #30475e; }
+        button { background: #4361ee; color: white; cursor: pointer; font-weight: bold; transition: 0.3s; }
+        button:hover { background: #3f37c9; }
+        button:disabled { background: #555; cursor: not-allowed; }
+        video { width: 100%; background: black; border-radius: 10px; margin: 10px 0; transform: scaleX(-1); }
+        .status { padding: 10px; border-radius: 5px; margin: 10px 0; text-align: center; font-weight: bold; }
+        .connected { background: #2ec4b6; color: #000; }
+        .disconnected { background: #e71d36; }
+        .connecting { background: #f8961e; color: #000; }
+        .log { background: #000; color: #0f0; padding: 10px; border-radius: 5px; font-family: monospace; height: 150px; overflow-y: scroll; direction: ltr; text-align: left; font-size: 12px; border: 1px solid #333; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>🎥 المديع - بث لـ 100 مشاهد</h2>
+        
+        <div>
+            <label>معرف الغرفة:</label>
+            <input type="text" id="roomId" value="live1">
+            <div id="viewerUrl" style="color: #4cc9f0; word-break: break-all; margin: 10px 0; font-size: 14px;"></div>
+        </div>
+        
+        <button id="startBtn">▶ بدء البث</button>
+        <button id="stopBtn" disabled>⏹ إيقاف البث</button>
+        
+        <div id="status" class="status disconnected">🔴 غير متصل</div>
+        
+        <video id="localVideo" autoplay muted playsinline></video>
+        
+        <div style="text-align: center; margin-top: 10px;">
+            <label>👁️ المشاهدون: <span id="viewerCount" style="font-size: 24px; color: #4cc9f0;">0</span>/100</label>
+        </div>
+        
+        <h3>📋 سجل النظام:</h3>
+        <div id="log" class="log"></div>
+    </div>
+
+    <script>
+        const SERVER = 'wss://cripanyt.onrender.com';
+        
+        const elements = {
+            roomId: document.getElementById('roomId'),
+            startBtn: document.getElementById('startBtn'),
+            stopBtn: document.getElementById('stopBtn'),
+            status: document.getElementById('status'),
+            localVideo: document.getElementById('localVideo'),
+            viewerCount: document.getElementById('viewerCount'),
+            viewerUrl: document.getElementById('viewerUrl'),
+            log: document.getElementById('log')
+        };
+        
+        let state = {
+            stream: null,
+            socket: null,
+            peerConnection: null, // اتصال واحد فقط مع SFU
+            roomId: '',
+            viewerCount: 0,
+            iceCandidatesQueue: []
+        };
+        
+        function log(msg) {
+            const time = new Date().toLocaleTimeString();
+            elements.log.innerHTML = `[${time}] ${msg}<br>` + elements.log.innerHTML;
+            console.log(msg);
+        }
+        
+        function updateStatus(text, className) {
+            elements.status.textContent = text;
+            elements.status.className = `status ${className}`;
+        }
+        
+        elements.startBtn.onclick = async () => {
+            state.roomId = elements.roomId.value.trim();
+            if(!state.roomId) return alert("أدخل معرف الغرفة");
+
+            // 1. تشغيل الكاميرا
+            try {
+                state.stream = await navigator.mediaDevices.getUserMedia({ 
+                    video: { width: 1280, height: 720 },
+                    audio: true 
+                });
+                elements.localVideo.srcObject = state.stream;
+                log("✅ تم تشغيل الكاميرا");
+            } catch (e) {
+                log("❌ فشل الوصول للكاميرا: " + e.message);
+                return;
+            }
+
+            // 2. الاتصال بالسيرفر SFU
+            updateStatus('جاري الاتصال بالسيرفر...', 'connecting');
+            state.socket = new WebSocket(SERVER);
+            
+            state.socket.onopen = () => {
+                log('✅ متصل بسيرفر SFU');
+                state.socket.send(JSON.stringify({ 
+                    type: 'create-room', 
+                    roomId: state.roomId 
+                }));
+                
+                elements.startBtn.disabled = true;
+                elements.stopBtn.disabled = false;
+                
+                // إنشاء اتصال WebRTC مع SFU
+                createSFUConnection();
+                
+                // رابط المشاهدة
+                const url = location.href.replace('broadcaster.html', 'viewer.html') + '?room=' + state.roomId;
+                elements.viewerUrl.innerHTML = `🔗 رابط المشاهدة: <a href="${url}" target="_blank" style="color:#80ffdb">${url}</a>`;
+            };
+            
+            state.socket.onmessage = async (event) => {
+                const data = JSON.parse(event.data);
+                
+                if (data.type === 'room-created') {
+                    log(`✅ الغرفة جاهزة لـ ${data.maxViewers} مشاهد`);
+                    updateStatus(`📡 البث مباشر: ${state.roomId}`, 'connected');
+                } 
+                else if (data.type === 'new-viewer') {
+                    state.viewerCount = data.totalViewers;
+                    elements.viewerCount.textContent = `${state.viewerCount}/100`;
+                    log(`👤 مشاهد جديد (${state.viewerCount}/100)`);
+                }
+                else if (data.type === 'viewer-left') {
+                    state.viewerCount = data.totalViewers;
+                    elements.viewerCount.textContent = `${state.viewerCount}/100`;
+                    log(`👋 مشاهد غادر (${state.viewerCount}/100)`);
+                }
+                else if (data.type === 'answer') {
+                    if (state.peerConnection) {
+                        await state.peerConnection.setRemoteDescription(
+                            new RTCSessionDescription(data.answer)
+                        );
+                        log('✅ تم استلام الرد من SFU');
+                    }
+                }
+                else if (data.type === 'ice-candidate') {
+                    if (state.peerConnection) {
+                        await state.peerConnection.addIceCandidate(
+                            new RTCIceCandidate(data.candidate)
+                        );
+                    }
+                }
+            };
+
+            state.socket.onclose = () => {
+                log('🔌 انقطع الاتصال بالسيرفر');
+                updateStatus('🔴 انقطع الاتصال', 'disconnected');
+            };
+        };
+
+        async function createSFUConnection() {
+            log('🔗 إنشاء اتصال مع SFU...');
+            
+            state.peerConnection = new RTCPeerConnection({
+                iceServers: [
+                    { urls: 'stun:stun.l.google.com:19302' },
+                    { urls: 'stun:stun1.l.google.com:19302' }
+                ]
+            });
+            
+            // إضافة تيار الوسائط
+            state.stream.getTracks().forEach(track => {
+                state.peerConnection.addTrack(track, state.stream);
+            });
+            
+            // ICE Candidates
+            state.peerConnection.onicecandidate = (event) => {
+                if (event.candidate && state.socket) {
+                    state.socket.send(JSON.stringify({
+                        type: 'ice-candidate',
+                        candidate: event.candidate,
+                        roomId: state.roomId
+                    }));
+                }
+            };
+            
+            // إنشاء العرض وإرساله لـ SFU
+            const offer = await state.peerConnection.createOffer({
+                offerToReceiveAudio: false,
+                offerToReceiveVideo: false
+            });
+            
+            await state.peerConnection.setLocalDescription(offer);
+            
+            // إرسال العرض إلى SFU (سيوزعه على جميع المشاهدين)
+            state.socket.send(JSON.stringify({
+                type: 'broadcast-media',
+                roomId: state.roomId,
+                sdp: offer,
+                mediaType: 'video'
+            }));
+            
+            log('📤 أرسل تيار الوسائط إلى SFU');
+        }
+
+        elements.stopBtn.onclick = () => {
+            log('⏹️ إيقاف البث...');
+            
+            if (state.stream) {
+                state.stream.getTracks().forEach(track => track.stop());
+            }
+            
+            if (state.peerConnection) {
+                state.peerConnection.close();
+            }
+            
+            if (state.socket) {
+                state.socket.close();
+            }
+            
+            location.reload();
+        };
+    </script>
+</body>
+</html>

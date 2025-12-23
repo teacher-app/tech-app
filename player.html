@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>مشغل البث</title>
+    <style>
+        * { margin: 0; padding: 0; }
+        video { width: 100vw; height: 100vh; object-fit: contain; background: black; }
+        #status { 
+            position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); 
+            color: white; font-size: 20px; background: rgba(0,0,0,0.7); padding: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div id="status">جاري تحميل البث...</div>
+    <video id="video" autoplay playsinline controls></video>
+    
+    <script>
+        // قراءة معرف الغرفة من الرابط
+        const urlParams = new URLSearchParams(window.location.search);
+        const roomId = urlParams.get('room') || 'live1';
+        
+        const SERVER = 'wss://cripanyt.onrender.com';
+        let socket;
+        let peerConnection;
+        
+        connect();
+        
+        function connect() {
+            socket = new WebSocket(SERVER);
+            
+            socket.onopen = () => {
+                socket.send(JSON.stringify({
+                    type: 'join-room',
+                    roomId: roomId
+                }));
+            };
+            
+            socket.onmessage = async (event) => {
+                const data = JSON.parse(event.data);
+                
+                if (data.type === 'offer') {
+                    await handleOffer(data.sdp);
+                }
+                else if (data.type === 'ice-candidate') {
+                    if (peerConnection) {
+                        peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate));
+                    }
+                }
+                else if (data.type === 'broadcaster-left') {
+                    document.getElementById('status').textContent = 'انتهى البث';
+                }
+            };
+            
+            socket.onclose = () => {
+                setTimeout(connect, 3000);
+            };
+        }
+        
+        async function handleOffer(sdp) {
+            if (peerConnection) peerConnection.close();
+            
+            peerConnection = new RTCPeerConnection({
+                iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+            });
+            
+            peerConnection.ontrack = (event) => {
+                const video = document.getElementById('video');
+                video.srcObject = event.streams[0];
+                document.getElementById('status').style.display = 'none';
+                video.play();
+            };
+            
+            peerConnection.onicecandidate = (event) => {
+                if (event.candidate) {
+                    socket.send(JSON.stringify({
+                        type: 'ice-candidate',
+                        candidate: event.candidate,
+                        roomId: roomId
+                    }));
+                }
+            };
+            
+            await peerConnection.setRemoteDescription(new RTCSessionDescription(sdp));
+            
+            const answer = await peerConnection.createAnswer();
+            await peerConnection.setLocalDescription(answer);
+            
+            socket.send(JSON.stringify({
+                type: 'answer',
+                sdp: answer,
+                roomId: roomId
+            }));
+        }
+    </script>
+</body>
+</html>
